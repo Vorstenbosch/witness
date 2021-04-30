@@ -1,14 +1,12 @@
 package witness
 
 import (
-	crypto_rand "crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/jpeg"
 	_ "image/png"
-	math_rand "math/rand"
+	"math/rand"
 
 	"github.com/rs/zerolog/log"
 )
@@ -29,12 +27,10 @@ func CreateImageFingerprint(imageToFind image.Image, numberOfPixels int) (ImageF
 	var err error
 	var fp ImageFingerprint
 
-	randomSeed()
-
 	var pixels []pixel
 	for i := 0; i < numberOfPixels; i++ {
-		x := math_rand.Intn(imageToFind.Bounds().Dx())
-		y := math_rand.Intn(imageToFind.Bounds().Dy())
+		x := rand.Intn(imageToFind.Bounds().Dx())
+		y := rand.Intn(imageToFind.Bounds().Dy())
 
 		pixel := pixel{
 			point: image.Point{x, y},
@@ -58,7 +54,7 @@ func CreateImageFingerprint(imageToFind image.Image, numberOfPixels int) (ImageF
 }
 
 // FIXME: is a bit flaky based on what fingerprint is used
-func FindImage(contextImage image.Image, ImageFingerprint ImageFingerprint) (bool, image.Rectangle) {
+func FindImage(contextImage image.Image, imageFingerprint ImageFingerprint) (bool, image.Rectangle) {
 	var found bool
 	var rectangle image.Rectangle
 
@@ -67,26 +63,29 @@ func FindImage(contextImage image.Image, ImageFingerprint ImageFingerprint) (boo
 			color := contextImage.At(x, y)
 
 			// Collect the set of pixels that match the color of this pixel of the context image
-			matchedPixels := matchPixelColor(color, ImageFingerprint)
+			matchedPixels := matchPixelColor(color, imageFingerprint)
 			for i := range matchedPixels {
 				pixel := matchedPixels[i]
 
 				// Verify if we can match the entire fingerprint
 				//   from this base pixel from the context image
-				if matchFingerprint(contextImage, ImageFingerprint, x, y, pixel) {
-					found = true
+				if matchFingerprint(contextImage, imageFingerprint, x, y, pixel) {
 					x0 := x - pixel.point.X
-					x1 := x0 + ImageFingerprint.image.Bounds().Dx()
+					x1 := x0 + imageFingerprint.image.Bounds().Dx()
 					y0 := y - pixel.point.Y
-					y1 := y0 + ImageFingerprint.image.Bounds().Dy()
+					y1 := y0 + imageFingerprint.image.Bounds().Dy()
 
-					rectangle = image.Rect(x0, y0, x1, y1)
+					if x0 >= 0 && y0 >= 0 && x1 <= contextImage.Bounds().Dx() && y1 <= contextImage.Bounds().Dy() {
+						found = true
 
-					log.Debug().
-						Str("rectangle", rectangle.String()).
-						Msg("fingerprint match found")
+						rectangle = image.Rect(x0, y0, x1, y1)
 
-					return found, rectangle
+						log.Debug().
+							Str("rectangle", rectangle.String()).
+							Msg("fingerprint match found")
+
+						return found, rectangle
+					}
 				}
 			}
 		}
@@ -129,17 +128,11 @@ func matchFingerprint(contextImage image.Image, imageFingerprint ImageFingerprin
 		yTranslated := contextY - (matchedPixel.point.Y - pixel.point.Y)
 
 		match = xTranslated >= 0 && yTranslated >= 0 && equals(contextImage.At(xTranslated, yTranslated), pixel.color)
+
+		if !match {
+			break
+		}
 	}
 
 	return match
-}
-
-func randomSeed() {
-	var b [8]byte
-	_, err := crypto_rand.Read(b[:])
-
-	if err != nil {
-		panic("Unable to setup the random seed")
-	}
-	math_rand.Seed(int64(binary.LittleEndian.Uint64(b[:])))
 }

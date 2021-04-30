@@ -17,13 +17,14 @@ const writeFoundImageToFile = true
 
 func TestScreenCaptureFinding(t *testing.T) {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	randomSeed()
 
 	// Given
 	b, _ := ioutil.ReadFile("test-images/brave-icon.png")
 	c, _ := ioutil.ReadFile("test-images/icons.png")
 	imageToFind, _, _ := image.Decode(bytes.NewReader(b))
 	contextImage, _, _ := image.Decode(bytes.NewReader(c))
-	fp, _ := CreateImageFingerprint(imageToFind, 40)
+	fp, _ := CreateImageFingerprint(imageToFind, 7)
 
 	// When
 	found, rectangle := FindImage(contextImage, fp)
@@ -37,7 +38,7 @@ func TestScreenCaptureFinding(t *testing.T) {
 		}
 	}
 
-	if found {
+	if found && writeFoundImageToFile {
 		cImage, _, _ := image.Decode(bytes.NewReader(c))
 		foundImage := cImage.(interface {
 			SubImage(r image.Rectangle) image.Image

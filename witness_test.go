@@ -2,16 +2,33 @@ package witness
 
 import (
 	"bytes"
+	crypto_rand "crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	math_rand "math/rand"
 	"os"
 	"testing"
 )
 
 // In case you want to view the test images
-const writeTestImagesToFile = false
+const writeTestImagesToFile = true
+
+var whitePixel = color.RGBA{
+	R: 255,
+	G: 255,
+	B: 255,
+	A: 255,
+}
+
+var blackPixel = color.RGBA{
+	R: 0,
+	G: 0,
+	B: 0,
+	A: 255,
+}
 
 func TestFingerprintCreation(t *testing.T) {
 	// Given
@@ -34,38 +51,28 @@ func TestFingerprintCreation(t *testing.T) {
 	}
 }
 
-func TestImageFinding(t *testing.T) {
+func TestImageFindingWithRandomFingerprint(t *testing.T) {
 	// Given
+	randomSeed()
 	contextImage := createContextImage()
 	imageToFind := createImageToFind()
 
-	fp, _ := CreateImageFingerprint(imageToFind, 5)
+	fp, _ := CreateImageFingerprint(imageToFind, 4)
 
 	// When
-	found, _ := FindImage(contextImage, fp)
+	found, rectangle := FindImage(contextImage, fp)
 
 	// Then
 	if !found {
 		t.Errorf("Could not find image")
+	} else {
+		if rectangle.Min.X != 0 || rectangle.Min.Y != 3 || rectangle.Max.X != 5 || rectangle.Max.Y != 4 {
+			t.Errorf("Matched on unexpected rectangle '%v'", rectangle)
+		}
 	}
-
 }
 
 func createContextImage() image.Image {
-	var whitePixel = color.RGBA{
-		R: 255,
-		G: 255,
-		B: 255,
-		A: 255,
-	}
-
-	var blackPixel = color.RGBA{
-		R: 0,
-		G: 0,
-		B: 0,
-		A: 255,
-	}
-
 	contextImage := image.NewRGBA(image.Rect(0, 0, 5, 5))
 
 	for x := 0; x < contextImage.Bounds().Dx(); x++ {
@@ -78,18 +85,23 @@ func createContextImage() image.Image {
 		}
 	}
 
+	if writeTestImagesToFile {
+		writeImageToFile(contextImage, "contextImage")
+	}
+
 	return contextImage
 }
 
 func createImageToFind() image.Image {
-	contextImage := createContextImage()
+	imageToFind := image.NewRGBA(image.Rect(0, 0, 5, 1))
 
-	imageToFind := contextImage.(interface {
-		SubImage(r image.Rectangle) image.Image
-	}).SubImage(image.Rect(0, 3, 5, 4))
+	imageToFind.Set(0, 0, blackPixel)
+	imageToFind.Set(1, 0, whitePixel)
+	imageToFind.Set(2, 0, blackPixel)
+	imageToFind.Set(3, 0, whitePixel)
+	imageToFind.Set(4, 0, blackPixel)
 
 	if writeTestImagesToFile {
-		writeImageToFile(contextImage, "contextImage")
 		writeImageToFile(imageToFind, "imageToFind")
 	}
 
@@ -103,4 +115,14 @@ func writeImageToFile(i image.Image, imageName string) {
 	f, _ := os.Create(fmt.Sprintf("%s.png", imageName))
 	defer f.Close()
 	f.Write(b.Bytes())
+}
+
+func randomSeed() {
+	var b [8]byte
+	_, err := crypto_rand.Read(b[:])
+
+	if err != nil {
+		panic("Unable to setup the random seed")
+	}
+	math_rand.Seed(int64(binary.LittleEndian.Uint64(b[:])))
 }
