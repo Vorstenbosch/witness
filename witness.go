@@ -1,11 +1,11 @@
-package see
+package witness
 
 import (
-	"bytes"
 	crypto_rand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/jpeg"
 	_ "image/png"
 	math_rand "math/rand"
@@ -15,185 +15,131 @@ import (
 
 type ImageFingerprint struct {
 	image  image.Image
-	points []ImagePoint
+	pixels []pixel
 }
 
-type ImagePoint struct {
-	x int
-	y int
-	r uint32
-	g uint32
-	b uint32
-	a uint32
+type pixel struct {
+	point image.Point
+	color color.Color
 }
 
-func CreateImageFingerprint(imageAsByteArray []byte, numberOfPoints int) (ImageFingerprint, error) {
+// CreateImageFingerprint creates a fingerprint of 'image' based on 'numberOfPixels'
+// FIXME: it is now possible for to get multiple pixels with the same coordinates
+func CreateImageFingerprint(imageToFind image.Image, numberOfPixels int) (ImageFingerprint, error) {
 	var err error
 	var fp ImageFingerprint
 
-	var b [8]byte
-	_, err = crypto_rand.Read(b[:])
-	if err == nil {
+	randomSeed()
 
-		math_rand.Seed(int64(binary.LittleEndian.Uint64(b[:])))
+	var pixels []pixel
+	for i := 0; i < numberOfPixels; i++ {
+		x := math_rand.Intn(imageToFind.Bounds().Dx())
+		y := math_rand.Intn(imageToFind.Bounds().Dy())
 
-		image, format, err := image.Decode(bytes.NewReader(imageAsByteArray))
-		if err == nil {
-			log.Debug().
-				Str("type", format).
-				Msg("image created from byte array")
-
-			var points []ImagePoint
-			for i := 0; i < numberOfPoints; i++ {
-				x := math_rand.Intn(image.Bounds().Dx())
-				y := math_rand.Intn(image.Bounds().Dy())
-				r, g, b, a := image.At(x, y).RGBA()
-
-				point := ImagePoint{
-					x: x,
-					y: y,
-					r: r,
-					g: g,
-					b: b,
-					a: a,
-				}
-
-				points = append(points, point)
-			}
-
-			fp = ImageFingerprint{
-				image:  image,
-				points: points,
-			}
-
-			log.Info().
-				Int("number of points", len(points)).
-				Str("fingerprint", fmt.Sprintf("%v", fp)).
-				Msg("image fingerprint created")
+		pixel := pixel{
+			point: image.Point{x, y},
+			color: imageToFind.At(x, y),
 		}
+
+		pixels = append(pixels, pixel)
 	}
+
+	fp = ImageFingerprint{
+		image:  imageToFind,
+		pixels: pixels,
+	}
+
+	log.Info().
+		Int("number of points", len(pixels)).
+		Str("fingerprint", fmt.Sprintf("%v", fp)).
+		Msg("image fingerprint created")
 
 	return fp, err
 }
 
-// TODO: Understand why it is flaky. It seems to be related to the fingerprint different fingerprints have different results
-// One: same colored points fail on first match and never go through the rest of the list
-func FindImage(contextImageInBytes []byte, ImageFingerprint ImageFingerprint) (bool, int, int, int, int) {
+// FIXME: is a bit flaky based on what fingerprint is used
+func FindImage(contextImage image.Image, ImageFingerprint ImageFingerprint) (bool, image.Rectangle) {
 	var found bool
-	var x0, y0, x1, y1 int
+	var rectangle image.Rectangle
 
-	contextImage, format, err := image.Decode(bytes.NewReader(contextImageInBytes))
+	for x := 0; x < contextImage.Bounds().Dx(); x++ {
+		for y := 0; y < contextImage.Bounds().Dy(); y++ {
+			color := contextImage.At(x, y)
 
-	if err == nil {
-		log.Debug().
-			Str("type", format).
-			Msg("Context image created from byte array")
+			// Collect the set of pixels that match the color of this pixel of the context image
+			matchedPixels := matchPixelColor(color, ImageFingerprint)
+			for i := range matchedPixels {
+				pixel := matchedPixels[i]
 
-		for x := 0; x < contextImage.Bounds().Dx(); x++ {
-			for y := 0; y < contextImage.Bounds().Dy(); y++ {
-				points := matchPoints(x, y, contextImage, ImageFingerprint)
-				for i := range points {
-					point := points[i]
-					if matchFingerprint(contextImage, ImageFingerprint, x, y, point.x, point.y) {
-						found = true
-						x0 = x - point.x
-						x1 = x0 + ImageFingerprint.image.Bounds().Dx()
-						y0 = y - point.y
-						y1 = y0 + ImageFingerprint.image.Bounds().Dy()
+				// Verify if we can match the entire fingerprint
+				//   from this base pixel from the context image
+				if matchFingerprint(contextImage, ImageFingerprint, x, y, pixel) {
+					found = true
+					x0 := x - pixel.point.X
+					x1 := x0 + ImageFingerprint.image.Bounds().Dx()
+					y0 := y - pixel.point.Y
+					y1 := y0 + ImageFingerprint.image.Bounds().Dy()
 
-						log.Debug().
-							Str("coordinates", fmt.Sprintf("%v,%v:%v,%v", x0, y0, x1, y1)).
-							Msg("fingerprint match found")
+					rectangle = image.Rect(x0, y0, x1, y1)
 
-						return found, x0, y0, x1, y1
-					}
+					log.Debug().
+						Str("rectangle", rectangle.String()).
+						Msg("fingerprint match found")
+
+					return found, rectangle
 				}
 			}
 		}
 	}
 
-	return found, x0, y0, x1, y1
+	return found, rectangle
 }
 
-func matchPoints(x, y int, contextImage image.Image, imageFingerprint ImageFingerprint) []ImagePoint {
-	var matchingPoints []ImagePoint
+func equals(c1, c2 color.Color) bool {
+	c1r, c1g, c1b, _ := c1.RGBA()
+	c2r, c2g, c2b, _ := c2.RGBA()
 
-	for i := range imageFingerprint.points {
-		point := imageFingerprint.points[i]
-		r, g, b, a := contextImage.At(x, y).RGBA()
-		if r == point.r && g == point.g && b == point.b && a == point.a {
-			log.Debug().Msgf("match found between context coordinate '%v,%v' and image fingerprint point '%v'", x, y, point)
-			matchingPoints = append(matchingPoints, point)
+	// Alpha values seem to differ, not comparing them
+	return c1r == c2r && c1g == c2g && c1b == c2b
+}
+
+func matchPixelColor(c color.Color, imageFingerprint ImageFingerprint) []pixel {
+	var matchingPoints []pixel
+
+	for i := range imageFingerprint.pixels {
+		pixel := imageFingerprint.pixels[i]
+		color := pixel.color
+
+		if equals(color, c) {
+			matchingPoints = append(matchingPoints, pixel)
 		}
 	}
 
 	return matchingPoints
 }
 
-func matchFingerprint(contextImage image.Image, imageFingerprint ImageFingerprint, contextX, contextY, imageX, imageY int) bool {
+func matchFingerprint(contextImage image.Image, imageFingerprint ImageFingerprint, contextX, contextY int, matchedPixel pixel) bool {
 	match := true
 
-	for i := range imageFingerprint.points {
-		point := imageFingerprint.points[i]
-		xTranslated := contextX - (imageX - point.x)
-		yTranslated := contextY - (imageY - point.y)
+	for i := range imageFingerprint.pixels {
+		pixel := imageFingerprint.pixels[i]
 
-		if xTranslated >= 0 && yTranslated >= 0 {
-			r, g, b, a := contextImage.At(xTranslated, yTranslated).RGBA()
-			match = (r == point.r && g == point.g && b == point.b && a == point.a)
-			if !match {
-				break
-			}
-		} else {
-			match = false
-			break
-		}
-	}
+		// Translate the coordinates based on the matching pixel, the current pixel and the context image coordinates
+		xTranslated := contextX - (matchedPixel.point.X - pixel.point.X)
+		yTranslated := contextY - (matchedPixel.point.Y - pixel.point.Y)
 
-	if !match {
-		log.Info().
-			Str("imageFingerprint", fmt.Sprintf("%v", imageFingerprint.points)).
-			Str("matchOrigin", fmt.Sprintf("contextX[%v]:imageX[%v],contextY[%v]:imageY[%v]", contextX, imageX, contextY, imageY)).
-			Msg("No match found for fingerprint")
+		match = xTranslated >= 0 && yTranslated >= 0 && equals(contextImage.At(xTranslated, yTranslated), pixel.color)
 	}
 
 	return match
 }
 
-////
-// These 'set' functions should not be necessary and are very bad for the performance
-// TODO: make it not flaky and remove 'set' functions
-////
+func randomSeed() {
+	var b [8]byte
+	_, err := crypto_rand.Read(b[:])
 
-func CreateImageFingerprintSet(imageAsByteArray []byte, numberOfPoints int, setSize int) []ImageFingerprint {
-	var imageFingerprintSet []ImageFingerprint
-
-	for i := 0; i < setSize; i++ {
-		fp, err := CreateImageFingerprint(imageAsByteArray, numberOfPoints)
-		if err == nil {
-			imageFingerprintSet = append(imageFingerprintSet, fp)
-		}
-
+	if err != nil {
+		panic("Unable to setup the random seed")
 	}
-
-	return imageFingerprintSet
-}
-
-func FindImageBasedOnSet(contextImageInBytes []byte, imageFingerprintSet []ImageFingerprint) (bool, int, int, int, int) {
-	var found bool
-	var x0, y0, x1, y1 int
-
-	for i := range imageFingerprintSet {
-		found, x0, y0, x1, y1 = FindImage(contextImageInBytes, imageFingerprintSet[i])
-		if found {
-			break
-		}
-
-		log.Info().
-			Int("image fingerprint", i+1).
-			Int("amount of fingerprints", len(imageFingerprintSet)).
-			Msg("No image found based on image fingerprint")
-	}
-
-	return found, x0, y0, x1, y1
+	math_rand.Seed(int64(binary.LittleEndian.Uint64(b[:])))
 }

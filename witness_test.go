@@ -1,31 +1,32 @@
-package see
+package witness
 
 import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
-	"io/ioutil"
 	"os"
 	"testing"
-
-	"github.com/rs/zerolog"
 )
 
-func TestFingerPrint(t *testing.T) {
+// In case you want to view the test images
+const writeTestImagesToFile = false
+
+func TestFingerprintCreation(t *testing.T) {
 	// Given
-	b, _ := ioutil.ReadFile("test-images/brave-icon.png")
+	imageToFind := createImageToFind()
 
 	// When
-	fp, err := CreateImageFingerprint(b, 10)
+	fp, err := CreateImageFingerprint(imageToFind, 5)
 
 	// Then
 	if err != nil {
 		t.Errorf("Unexpected error '%v' occured", err)
 	}
 
-	if len(fp.points) != 10 {
-		t.Errorf("Unexpected amount of points ('%v') found ", len(fp.points))
+	if len(fp.pixels) != 5 {
+		t.Errorf("Unexpected amount of points ('%v') found ", len(fp.pixels))
 	}
 
 	if fp.image == nil {
@@ -34,82 +35,72 @@ func TestFingerPrint(t *testing.T) {
 }
 
 func TestImageFinding(t *testing.T) {
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-
 	// Given
-	b, _ := ioutil.ReadFile("test-images/brave-icon.png")
-	fp, _ := CreateImageFingerprint(b, 10)
-	c, _ := ioutil.ReadFile("test-images/icons.png")
+	contextImage := createContextImage()
+	imageToFind := createImageToFind()
+
+	fp, _ := CreateImageFingerprint(imageToFind, 5)
 
 	// When
-	found, x0, y0, x1, y1 := FindImage(c, fp)
+	found, _ := FindImage(contextImage, fp)
 
 	// Then
 	if !found {
-		t.Errorf("Failed to match")
-	} else {
-		if x0 != 24 && y0 != 508 && x1 != 154 && y0 != 154 {
-			t.Errorf("Matched on unexpected coordinate")
-		}
+		t.Errorf("Could not find image")
 	}
 
-	if found {
-		cImage, _, _ := image.Decode(bytes.NewReader(c))
-		foundImage := cImage.(interface {
-			SubImage(r image.Rectangle) image.Image
-		}).SubImage(image.Rect(x0, y0, x1, y1))
-
-		// create buffer
-		foundImageBytes := new(bytes.Buffer)
-
-		// encode image to buffer
-		err := png.Encode(foundImageBytes, foundImage)
-		if err != nil {
-			fmt.Println("failed to create buffer", err)
-		}
-
-		f, _ := os.Create("test-images/found-image.png")
-		defer f.Close()
-		f.Write(foundImageBytes.Bytes())
-	}
 }
 
-func TestImageFindingBasedOnSet(t *testing.T) {
-	// Given
-	b, _ := ioutil.ReadFile("test-images/brave-icon.png")
-	fps := CreateImageFingerprintSet(b, 10, 50)
-	c, _ := ioutil.ReadFile("test-images/icons.png")
-
-	// When
-	found, x0, y0, x1, y1 := FindImageBasedOnSet(c, fps)
-
-	// Then
-	if !found {
-		t.Errorf("Failed to match")
+func createContextImage() image.Image {
+	var whitePixel = color.RGBA{
+		R: 255,
+		G: 255,
+		B: 255,
+		A: 255,
 	}
 
-	if x0 != 24 && y0 != 508 && x1 != 154 && y0 != 154 {
-		t.Errorf("Matched on unexpected coordinate")
+	var blackPixel = color.RGBA{
+		R: 0,
+		G: 0,
+		B: 0,
+		A: 255,
 	}
 
-	if found {
-		cImage, _, _ := image.Decode(bytes.NewReader(c))
-		foundImage := cImage.(interface {
-			SubImage(r image.Rectangle) image.Image
-		}).SubImage(image.Rect(x0, y0, x1, y1))
+	contextImage := image.NewRGBA(image.Rect(0, 0, 5, 5))
 
-		// create buffer
-		foundImageBytes := new(bytes.Buffer)
-
-		// encode image to buffer
-		err := png.Encode(foundImageBytes, foundImage)
-		if err != nil {
-			fmt.Println("failed to create buffer", err)
+	for x := 0; x < contextImage.Bounds().Dx(); x++ {
+		for y := 0; y < contextImage.Bounds().Dy(); y++ {
+			if y == 3 && x%2 == 0 {
+				contextImage.Set(x, y, blackPixel)
+			} else {
+				contextImage.Set(x, y, whitePixel)
+			}
 		}
-
-		f, _ := os.Create("test-images/found-image.png")
-		defer f.Close()
-		f.Write(foundImageBytes.Bytes())
 	}
 
+	return contextImage
+}
+
+func createImageToFind() image.Image {
+	contextImage := createContextImage()
+
+	imageToFind := contextImage.(interface {
+		SubImage(r image.Rectangle) image.Image
+	}).SubImage(image.Rect(0, 3, 5, 4))
+
+	if writeTestImagesToFile {
+		writeImageToFile(contextImage, "contextImage")
+		writeImageToFile(imageToFind, "imageToFind")
+	}
+
+	return imageToFind
+}
+
+func writeImageToFile(i image.Image, imageName string) {
+	b := new(bytes.Buffer)
+	png.Encode(b, i)
+
+	f, _ := os.Create(fmt.Sprintf("%s.png", imageName))
+	defer f.Close()
+	f.Write(b.Bytes())
 }
